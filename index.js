@@ -3,7 +3,7 @@ import { saveSettingsDebounced } from "../../../../script.js";
 
 const MODULE_NAME = "st-immersive-reading";
 const MODULE_DISPLAY_NAME = "沉浸式阅读";
-const VERSION = "1.0.5";
+const VERSION = "1.0.6";
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
@@ -38,13 +38,11 @@ let lastRenderKey = "";
 let panelBootTimer = null;
 let observerBootTimer = null;
 const BOOT_INTERVAL_MS = 500;
-const BOOT_MAX_ATTEMPTS = 40; // 最多 20s
+const BOOT_MAX_ATTEMPTS = 40;
 
 function settings() {
     extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
     const s = extension_settings[MODULE_NAME];
-
-    // 补齐缺失项
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
         if (!Object.prototype.hasOwnProperty.call(s, key)) s[key] = value;
     }
@@ -481,7 +479,6 @@ function renderMessage(mes) {
 }
 
 function ensureNativeWrapper(textEl) {
-    // 不替换酒馆消息，只在正文里加一层投影容器。
     if (textEl.querySelector(":scope > .stir-native-content") && textEl.querySelector(":scope > .stir-reader-projection")) return;
 
     const wrapper = document.createElement("div");
@@ -568,6 +565,15 @@ function buildHiddenUserProjection() {
     return div;
 }
 
+function trimLeadingIndent(p) {
+    if (settings().indentMode === "off") return;
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    const first = walker.nextNode();
+    if (first) {
+        first.textContent = first.textContent.replace(/^[\u0020\u00A0\u3000\uFEFF\u200B\t]+/, "");
+    }
+}
+
 function appendReadableBlocks(source, target) {
     let paragraph = null;
 
@@ -581,7 +587,10 @@ function appendReadableBlocks(source, target) {
 
     const flush = () => {
         if (!paragraph) return;
-        if (paragraph.textContent.trim() || paragraph.children.length) target.append(paragraph);
+        if (paragraph.textContent.trim() || paragraph.children.length) {
+            trimLeadingIndent(paragraph);
+            target.append(paragraph);
+        }
         paragraph = null;
     };
 
@@ -647,6 +656,7 @@ function cloneAsParagraph(node) {
     const p = document.createElement("p");
     p.className = "stir-p";
     for (const child of [...node.childNodes]) p.append(child.cloneNode(true));
+    trimLeadingIndent(p);
     return p;
 }
 
