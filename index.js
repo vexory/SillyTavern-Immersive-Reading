@@ -3,7 +3,7 @@ import { saveSettingsDebounced } from "../../../../script.js";
 
 const MODULE_NAME = "st-immersive-reading";
 const MODULE_DISPLAY_NAME = "沉浸式阅读";
-const VERSION = "1.0.4";
+const VERSION = "1.0.5";
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
@@ -44,7 +44,7 @@ function settings() {
     extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
     const s = extension_settings[MODULE_NAME];
 
-    // 只补齐缺失项，不做版本迁移。
+    // 补齐缺失项
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
         if (!Object.prototype.hasOwnProperty.call(s, key)) s[key] = value;
     }
@@ -287,7 +287,11 @@ function bindPanelEvents() {
         $(selector).on("change", event => {
             settings()[key] = Boolean(event.target.checked);
             applyReaderState();
-            if (rerender) requestRender(key);
+            if (rerender) {
+                // 结构性选项：强制让所有消息重新投影
+                lastRenderKey = "";
+                requestRender(key);
+            }
             persist();
         });
     }
@@ -581,6 +585,8 @@ function appendReadableBlocks(source, target) {
         paragraph = null;
     };
 
+    const splitBr = settings().splitBrToParagraph;
+
     for (const node of [...source.childNodes]) {
         if (node.nodeType === Node.TEXT_NODE) {
             appendTextNode(node, ensureParagraph, flush);
@@ -591,20 +597,28 @@ function appendReadableBlocks(source, target) {
 
         const tag = node.tagName.toLowerCase();
         if (tag === "br") {
-            if (settings().splitBrToParagraph) flush();
+            if (splitBr) flush();
             else ensureParagraph().append(document.createElement("br"));
             continue;
         }
 
         if (tag === "p") {
             flush();
-            target.append(cloneAsParagraph(node));
+            if (splitBr && containsBr(node)) {
+                appendReadableBlocks(node, target);
+            } else {
+                target.append(cloneAsParagraph(node));
+            }
             continue;
         }
 
         if (isSimpleBlock(node)) {
             flush();
-            target.append(cloneAsParagraph(node));
+            if (splitBr && containsBr(node)) {
+                appendReadableBlocks(node, target);
+            } else {
+                target.append(cloneAsParagraph(node));
+            }
             continue;
         }
 
@@ -612,6 +626,10 @@ function appendReadableBlocks(source, target) {
     }
 
     flush();
+}
+
+function containsBr(node) {
+    return Boolean(node.querySelector && node.querySelector("br"));
 }
 
 function appendTextNode(node, ensureParagraph, flush) {
@@ -648,11 +666,11 @@ function isComplexContent(wrapper) {
 }
 
 function messageHash(wrapper) {
-    // 首尾双采样：流式生成时尾部变化剧烈，单纯截前 128 字符会漏
+    // 首尾双采样：流式生成时尾部变化剧烈；把采样扩到 128/128 降低碰撞概率。
     const html = wrapper.innerHTML;
     const textLen = wrapper.textContent.length;
-    const head = html.length > 64 ? html.slice(0, 64) : html;
-    const tail = html.length > 128 ? html.slice(-64) : "";
+    const head = html.length > 128 ? html.slice(0, 128) : html;
+    const tail = html.length > 256 ? html.slice(-128) : "";
     return `${textLen}:${html.length}:${head}:${tail}`;
 }
 
