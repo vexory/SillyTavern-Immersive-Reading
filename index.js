@@ -3,57 +3,183 @@ import { saveSettingsDebounced } from "../../../../script.js";
 
 const MODULE_NAME = "st-immersive-reading";
 const MODULE_DISPLAY_NAME = "沉浸式阅读";
-const VERSION = "1.0.6";
+const AUTHOR = "vexory";
+const VERSION = "2.0.0";
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
-
-    userMode: "normal",      // normal | folded | hidden
-    toolsMode: "always",     // always | folded
-
-    fontFamily: "system",    // system | custom
+    userMode: "normal",
+    toolsMode: "always",
+    fontFamily: "system",
     customFontFamily: "",
-
     fontSize: 18,
     lineHeight: 1.82,
     paragraphGap: 0.34,
     indent: 2,
     contentWidth: 42,
     sidePadding: 1.05,
-
-    indentMode: "firstline", // firstline | block | off
+    indentMode: "firstline",
     splitBrToParagraph: true,
     justifyText: true,
-    layoutMode: "follow",    // follow | clean
+    layoutMode: "follow",
 });
 
-// 运行时状态
-let observer = null;
-let observerTarget = null;
-let renderQueued = false;
-let isRendering = false;
-let lastRenderKey = "";
+const NUMERIC_LIMITS = Object.freeze({
+    fontSize: [14, 28],
+    lineHeight: [1.35, 2.3],
+    paragraphGap: [0, 1.2],
+    indent: [0, 4],
+    contentWidth: [18, 72],
+    sidePadding: [0.2, 3.2],
+});
 
-// 面板注入 & observer 挂载重试
-let panelBootTimer = null;
-let observerBootTimer = null;
-const BOOT_INTERVAL_MS = 500;
-const BOOT_MAX_ATTEMPTS = 40;
+const ENUMS = Object.freeze({
+    userMode: new Set(["normal", "folded", "hidden"]),
+    toolsMode: new Set(["always", "folded"]),
+    fontFamily: new Set(["system", "custom"]),
+    indentMode: new Set(["firstline", "block", "off"]),
+    layoutMode: new Set(["follow", "clean"]),
+});
+
+const READER_CLASSES = [
+    "stir-reader-active",
+    "stir-font-follow", "stir-font-custom",
+    "stir-user-folded", "stir-user-normal", "stir-user-hidden",
+    "stir-tools-folded", "stir-tools-always",
+    "stir-indent-firstline", "stir-indent-block", "stir-indent-off",
+    "stir-layout-follow", "stir-layout-clean",
+    "stir-justify-text",
+];
+
+const NATIVE_CONTROL_SELECTOR = [
+    "button", "a", "input", "textarea", "select", "option", "summary", "details",
+    "[contenteditable='true']", ".swipe_left", ".swipe_right",
+    ".mes_buttons", ".extraMesButtons", ".extra_mes_buttons", ".mes_edit_buttons",
+    ".mes_button", ".mes_edit", ".mes_delete", ".mes_copy", ".mes_more", ".menu_button",
+    "[class*='mes_edit']", "[class*='mes_button']", "[class*='extraMes']",
+].join(",");
+
+const HEADER_SELECTOR = [
+    ".mesAvatarWrapper", ".ch_name", ".name_text", ".mes_name", ".avatar",
+    ".mes_timer", ".timestamp", ".mesIDDisplay", ".tokenCounterDisplay",
+    ".mes_model", ".mes_meta", ".mes_header",
+].join(",");
+
+const NATIVE_ONLY_SELECTOR = [
+    "script", "style", "link[rel='stylesheet']", "form", "input", "button", "select", "textarea", "canvas", "iframe",
+    "[contenteditable='true']", "[onclick]", "[onchange]", "[oninput]", "[onmousedown]", "[onmouseup]", "[ontouchstart]",
+    ".mes_reasoning", ".stscript", ".world_entry", ".qr--buttons",
+    ".user-avatar", ".user_avatar", ".char-avatar", ".char_avatar",
+    "[data-stir-native]", "[data-stir-frontend]", "[data-tavern-helper]", "[data-js-slash-runner]",
+].join(",");
+
+const FRONTEND_CODE_SELECTOR = "pre, code";
+const FRONTEND_CODE_RE = /<(?:!doctype\s+html|html\b|body\b|script\b|iframe\b|canvas\b|button\b|form\b)/i;
+const FRONTEND_CODE_BODY_RE = /<body\b[\s\S]*<\/body>/i;
+
+const PRESERVE_TAGS = new Set([
+    "TABLE", "PRE", "UL", "OL", "DL", "MENU",
+    "IMG", "VIDEO", "AUDIO", "SVG", "PICTURE", "FIGURE",
+    "DETAILS", "BLOCKQUOTE", "HR",
+    "H1", "H2", "H3", "H4", "H5", "H6",
+]);
+
+const VISUAL_ISLAND_STYLE_RE = /(?:^|;)\s*(?:display\s*:\s*(?:flex|grid|inline-flex|inline-grid)|position\s*:\s*(?:absolute|fixed|sticky)|writing-mode\s*:|background(?:-color|-image)?\s*:|border(?:-[^:]+)?\s*:|box-shadow\s*:|width\s*:|height\s*:|min-width\s*:|min-height\s*:|max-width\s*:|max-height\s*:|transform\s*:|container-type\s*:)/i;
+const VISUAL_ISLAND_CLASS_RE = /(?:^|[-_\s])(?:card|panel|frontend|status|stats?|mvu|dashboard|inventory|profile|meter|bar|widget|ui)(?:$|[-_\s])/i;
+
+const FLOW_CONTAINER_TAGS = new Set(["DIV", "SECTION", "ARTICLE", "MAIN", "ASIDE", "HEADER", "FOOTER"]);
+const PARAGRAPH_TAGS = new Set(["P"]);
+
+const LEADING_INDENT_RE = /^[\u0020\u00A0\u3000\uFEFF\u200B\t]+/;
+const VIEWPORT_MARGIN = "800px 0px";
+const BIG_BATCH_THRESHOLD = 24;
+const STREAMING_THROTTLE_MS = 110;
+const STREAMING_GRACE_MS = 380;
+const BOOT_TIMEOUT_MS = 20_000;
+
+let mutationObserver = null;
+let intersectionObserver = null;
+let observerTarget = null;
+let panelBootAbortController = null;
+let chatBootAbortController = null;
+let panelEventAbortController = null;
+
+let renderScheduled = false;
+let renderTimerId = null;
+let isRendering = false;
+let streamingDeadline = 0;
+let hotSettings = null;
+
+const messageState = new WeakMap();
+const dirtyMessages = new Set();
+
+/* -------------------- Settings -------------------- */
 
 function settings() {
-    extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
-    const s = extension_settings[MODULE_NAME];
+    let s = extension_settings[MODULE_NAME];
+    if (!s || typeof s !== "object") s = extension_settings[MODULE_NAME] = {};
+
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-        if (!Object.prototype.hasOwnProperty.call(s, key)) s[key] = value;
+        if (!(key in s)) s[key] = value;
     }
+    normalizeSettings(s);
     return s;
+}
+
+function normalizeSettings(s) {
+    for (const [key, set] of Object.entries(ENUMS)) {
+        if (!set.has(s[key])) s[key] = DEFAULT_SETTINGS[key];
+    }
+    for (const [key, [min, max]] of Object.entries(NUMERIC_LIMITS)) {
+        const value = Number(s[key]);
+        s[key] = Number.isFinite(value) ? clamp(value, min, max) : DEFAULT_SETTINGS[key];
+    }
+    s.enabled = Boolean(s.enabled);
+    s.splitBrToParagraph = Boolean(s.splitBrToParagraph);
+    s.justifyText = Boolean(s.justifyText);
+    s.customFontFamily = String(s.customFontFamily || "");
+}
+
+function activeSettings() {
+    return hotSettings || settings();
 }
 
 function persist() {
     saveSettingsDebounced();
 }
 
-/* -------------------- 设置面板 -------------------- */
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function getState(mes) {
+    let st = messageState.get(mes);
+    if (!st) {
+        st = {
+            revision: 0,
+            renderKey: "",
+            visible: null,
+            everRendered: false,
+            pendingRender: false,
+            observed: false,
+            headerAbort: null,
+        };
+        messageState.set(mes, st);
+    }
+    return st;
+}
+
+function projectionSettingsKey(s, userMes, isEditing) {
+    return [
+        s.userMode,
+        s.splitBrToParagraph ? "br1" : "br0",
+        s.indentMode,
+        userMes ? "user" : "ai",
+        isEditing ? "edit" : "view",
+    ].join("|");
+}
+
+/* -------------------- Settings panel -------------------- */
 
 function initPanel() {
     if (document.getElementById("stir_settings_panel")) return true;
@@ -61,7 +187,7 @@ function initPanel() {
     const target = document.querySelector("#extensions_settings2") || document.querySelector("#extensions_settings");
     if (!target) return false;
 
-    const html = `
+    target.insertAdjacentHTML("beforeend", `
         <div id="stir_settings_panel" class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
                 <b>ST Immersive Reading / ${MODULE_DISPLAY_NAME}</b>
@@ -72,10 +198,6 @@ function initPanel() {
                     <input id="stir_enabled" type="checkbox">
                     <span>启用阅读排版</span>
                 </label>
-
-                <div class="stir-note stir-important-note">
-                    为 SillyTavern 长文本 RP 提供沉浸式阅读排版。保留原消息、原按钮、编辑/删除/swipe/楼层信息；只生成阅读投影来优化段落、缩进和手机阅读体验。主题、背景与复杂 HTML 始终跟随酒馆。
-                </div>
 
                 <div class="stir-section-title">消息显示</div>
                 <div class="stir-row stir-row-compact">
@@ -105,27 +227,16 @@ function initPanel() {
                 <div class="stir-row stir-custom-font-row">
                     <label for="stir_custom_font">自定义字体</label>
                     <input id="stir_custom_font" type="text" placeholder="例如：LXGW WenKai, 'Noto Serif SC', serif">
-                    <div class="stir-inline-help">填写 CSS font-family 值；多个字体用英文逗号分隔；字体名含空格建议加英文引号；不要写 font-family:，末尾不要加句号。</div>
+                    <div class="stir-inline-help">填写 CSS font-family 值；多个字体用英文逗号分隔；字体名含空格建议加英文引号；不要写 font-family:。</div>
                 </div>
 
                 <div class="stir-grid">
-                    <label>字号(px) <input id="stir_font_size" type="range" min="14" max="28" step="1"></label>
-                    <input id="stir_font_size_num" class="stir-number-input" type="number" min="14" max="28" step="1">
-
-                    <label>行高(倍) <input id="stir_line_height" type="range" min="1.35" max="2.3" step="0.01"></label>
-                    <input id="stir_line_height_num" class="stir-number-input" type="number" min="1.35" max="2.3" step="0.01">
-
-                    <label>段距(em) <input id="stir_paragraph_gap" type="range" min="0" max="1.2" step="0.02"></label>
-                    <input id="stir_paragraph_gap_num" class="stir-number-input" type="number" min="0" max="1.2" step="0.02">
-
-                    <label>缩进(em) <input id="stir_indent" type="range" min="0" max="4" step="0.1"></label>
-                    <input id="stir_indent_num" class="stir-number-input" type="number" min="0" max="4" step="0.1">
-
-                    <label>最大宽度(rem) <input id="stir_content_width" type="range" min="18" max="72" step="1"></label>
-                    <input id="stir_content_width_num" class="stir-number-input" type="number" min="18" max="72" step="1">
-
-                    <label>边距(rem) <input id="stir_side_padding" type="range" min="0.2" max="3.2" step="0.05"></label>
-                    <input id="stir_side_padding_num" class="stir-number-input" type="number" min="0.2" max="3.2" step="0.05">
+                    ${numericControlHtml("字号(px)", "font_size", 14, 28, 1)}
+                    ${numericControlHtml("行高(倍)", "line_height", 1.35, 2.3, 0.01)}
+                    ${numericControlHtml("段距(em)", "paragraph_gap", 0, 1.2, 0.02)}
+                    ${numericControlHtml("缩进(em)", "indent", 0, 4, 0.1)}
+                    ${numericControlHtml("最大宽度(rem)", "content_width", 18, 72, 1)}
+                    ${numericControlHtml("边距(rem)", "side_padding", 0.2, 3.2, 0.05)}
                 </div>
 
                 <div class="stir-row stir-row-compact">
@@ -151,44 +262,71 @@ function initPanel() {
                     </select>
                 </div>
 
-                <div class="stir-note">
-                    “最大宽度”主要影响桌面/平板；手机端更明显的是“边距”。主题、背景、默认字体跟随酒馆；“布局兼容”只修正第三方主题造成的消息外壳挤压，不接管全局主题。
+                <div class="stir-note">“清理消息外壳”只修正第三方主题挤压问题，不接管主题颜色。</div>
+
+                <div class="stir-footer-wrap">
+                    <button type="button" class="stir-footer-trigger" aria-label="关于" aria-expanded="false">
+                        <span class="stir-footer-icon" aria-hidden="true">ⓘ</span>
+                        <span class="stir-footer-version">v${VERSION}</span>
+                    </button>
+                    <div class="stir-about-popover" hidden role="dialog" aria-label="关于">
+                        <div class="stir-about-title">ST Immersive Reading</div>
+                        <div class="stir-about-row"><span>Version</span><b>${VERSION}</b></div>
+                        <div class="stir-about-row"><span>Author</span><b>${AUTHOR}</b></div>
+                    </div>
                 </div>
             </div>
-        </div>`;
+        </div>`);
 
-    target.insertAdjacentHTML("beforeend", html);
     hydratePanel();
     bindPanelEvents();
     return true;
 }
 
-function schedulePanelBoot() {
+function numericControlHtml(label, idPart, min, max, step) {
+    return `
+        <label>${label} <input id="stir_${idPart}" type="range" min="${min}" max="${max}" step="${step}"></label>
+        <input id="stir_${idPart}_num" class="stir-number-input" type="number" min="${min}" max="${max}" step="${step}">`;
+}
+
+function bootPanelWhenReady() {
     if (initPanel()) return;
 
-    let attempts = 0;
-    panelBootTimer = setInterval(() => {
-        attempts += 1;
-        if (initPanel() || attempts >= BOOT_MAX_ATTEMPTS) {
-            clearInterval(panelBootTimer);
-            panelBootTimer = null;
-        }
-    }, BOOT_INTERVAL_MS);
+    panelBootAbortController?.abort();
+    const controller = new AbortController();
+    panelBootAbortController = controller;
+
+    let timerId = 0;
+    const observer = new MutationObserver(() => {
+        if (initPanel()) cleanupPanelBoot(controller, observer, timerId);
+    });
+
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    timerId = window.setTimeout(() => {
+        cleanupPanelBoot(controller, observer, timerId);
+        initPanel();
+    }, BOOT_TIMEOUT_MS);
+
+    controller.signal.addEventListener("abort", () => cleanupPanelBoot(controller, observer, timerId), { once: true });
+}
+
+function cleanupPanelBoot(controller, observer, timerId) {
+    observer.disconnect();
+    if (timerId) window.clearTimeout(timerId);
+    if (panelBootAbortController === controller) panelBootAbortController = null;
 }
 
 function hydratePanel() {
     const s = settings();
-
-    $("#stir_enabled").prop("checked", !!s.enabled);
+    $("#stir_enabled").prop("checked", s.enabled);
     $("#stir_user_mode").val(s.userMode);
     $("#stir_tools_mode").val(s.toolsMode);
     $("#stir_font_family").val(s.fontFamily);
-    $("#stir_custom_font").val(s.customFontFamily || "");
+    $("#stir_custom_font").val(s.customFontFamily);
     $("#stir_indent_mode").val(s.indentMode);
-    $("#stir_layout_mode").val(s.layoutMode || "follow");
-    $("#stir_split_br").prop("checked", !!s.splitBrToParagraph);
-    $("#stir_justify_text").prop("checked", !!s.justifyText);
-
+    $("#stir_layout_mode").val(s.layoutMode);
+    $("#stir_split_br").prop("checked", s.splitBrToParagraph);
+    $("#stir_justify_text").prop("checked", s.justifyText);
     updateNumbers();
     updateCustomFontVisibility();
 }
@@ -203,9 +341,8 @@ function updateNumbers() {
         ["#stir_content_width", "#stir_content_width_num", s.contentWidth],
         ["#stir_side_padding", "#stir_side_padding_num", s.sidePadding],
     ];
-
+    const active = document.activeElement;
     for (const [range, number, value] of pairs) {
-        const active = document.activeElement;
         if (active !== document.querySelector(range)) $(range).val(value);
         if (active !== document.querySelector(number)) $(number).val(value);
     }
@@ -216,41 +353,59 @@ function updateCustomFontVisibility() {
 }
 
 function bindPanelEvents() {
-    $("#stir_enabled").on("change", event => {
+    bindSetting("#stir_enabled", "change", event => {
         settings().enabled = Boolean(event.target.checked);
         applyReaderState();
-        requestRender("enabled");
         persist();
     });
 
-    $("#stir_user_mode").on("change", event => {
+    bindSetting("#stir_user_mode", "change", event => {
         settings().userMode = event.target.value;
         applyReaderState();
-        requestRender("user-mode");
+        markAllDirty();
         persist();
     });
 
-    $("#stir_tools_mode").on("change", event => {
+    bindSetting("#stir_tools_mode", "change", event => {
         settings().toolsMode = event.target.value;
         applyReaderState();
         persist();
     });
 
-    $("#stir_font_family").on("change", event => {
+    bindSetting("#stir_font_family", "change", event => {
         settings().fontFamily = event.target.value;
         updateCustomFontVisibility();
         applyReaderState();
         persist();
     });
 
-    $("#stir_custom_font").on("input change", event => {
+    bindSetting("#stir_custom_font", "input change", event => {
         settings().customFontFamily = String(event.target.value || "");
         applyReaderState();
         persist();
     });
 
-    $("#stir_indent_mode").on("change", event => {
+    bindSetting("#stir_indent_mode", "change", event => {
         settings().indentMode = event.target.value;
+        applyReaderState();
+        markAllDirty();
+        persist();
+    });
+
+    bindSetting("#stir_split_br", "change", event => {
+        settings().splitBrToParagraph = Boolean(event.target.checked);
+        markAllDirty();
+        persist();
+    });
+
+    bindSetting("#stir_justify_text", "change", event => {
+        settings().justifyText = Boolean(event.target.checked);
+        applyReaderState();
+        persist();
+    });
+
+    bindSetting("#stir_layout_mode", "change", event => {
+        settings().layoutMode = event.target.value;
         applyReaderState();
         persist();
     });
@@ -265,43 +420,65 @@ function bindPanelEvents() {
     ];
 
     for (const [range, number, key] of numericBindings) {
-        $(`${range}, ${number}`).on("input change", event => {
+        bindSetting(`${range}, ${number}`, "input change", event => {
+            const [min, max] = NUMERIC_LIMITS[key];
             const value = Number(event.target.value);
             if (!Number.isFinite(value)) return;
-
-            settings()[key] = value;
+            settings()[key] = clamp(value, min, max);
             updateNumbers();
             applyReaderState();
             persist();
         });
     }
 
-    const booleanBindings = [
-        ["#stir_split_br", "splitBrToParagraph", true],
-        ["#stir_justify_text", "justifyText", false],
-    ];
-
-    for (const [selector, key, rerender] of booleanBindings) {
-        $(selector).on("change", event => {
-            settings()[key] = Boolean(event.target.checked);
-            applyReaderState();
-            if (rerender) {
-                // 结构性选项：强制让所有消息重新投影
-                lastRenderKey = "";
-                requestRender(key);
-            }
-            persist();
-        });
-    }
-
-    $("#stir_layout_mode").on("change", event => {
-        settings().layoutMode = event.target.value;
-        applyReaderState();
-        persist();
-    });
+    bindAboutPopover();
 }
 
-/* -------------------- 阅读态应用 -------------------- */
+function namespacedEvents(events) {
+    return String(events)
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(event => `${event}.stir`)
+        .join(" ");
+}
+
+function bindSetting(selector, events, handler) {
+    const ev = namespacedEvents(events);
+    $(selector).off(ev).on(ev, handler);
+}
+
+function bindAboutPopover() {
+    const panel = document.getElementById("stir_settings_panel");
+    const btn = panel?.querySelector(".stir-footer-trigger");
+    const pop = panel?.querySelector(".stir-about-popover");
+    if (!panel || !btn || !pop) return;
+
+    panelEventAbortController?.abort();
+    panelEventAbortController = new AbortController();
+    const { signal } = panelEventAbortController;
+
+    btn.addEventListener("click", event => {
+        event.stopPropagation();
+        const open = pop.hidden;
+        pop.hidden = !open;
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+    }, { signal });
+
+    document.addEventListener("click", event => {
+        if (pop.hidden) return;
+        if (event.target instanceof Element && event.target.closest(".stir-footer-wrap")) return;
+        pop.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+    }, { signal });
+
+    document.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || pop.hidden) return;
+        pop.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+    }, { signal });
+}
+
+/* -------------------- Reader state -------------------- */
 
 function customFontFamilyValue() {
     const custom = String(settings().customFontFamily || "").trim();
@@ -311,6 +488,7 @@ function customFontFamilyValue() {
 function applyReaderState() {
     const s = settings();
     const root = document.documentElement;
+    const body = document.body;
 
     root.style.setProperty("--stir-font-size", `${s.fontSize}px`);
     root.style.setProperty("--stir-line-height", String(s.lineHeight));
@@ -320,225 +498,382 @@ function applyReaderState() {
     root.style.setProperty("--stir-side-padding", `${s.sidePadding}rem`);
     root.style.setProperty("--stir-custom-font-family", customFontFamilyValue());
 
-    const remove = [
-        "stir-reader-active",
-        "stir-font-follow", "stir-font-custom",
-        "stir-user-folded", "stir-user-normal", "stir-user-hidden",
-        "stir-tools-folded", "stir-tools-always",
-        "stir-indent-firstline", "stir-indent-block", "stir-indent-off",
-        "stir-layout-follow", "stir-layout-clean",
-        "stir-justify-text",
-    ];
+    const wanted = new Set();
+    if (s.enabled) wanted.add("stir-reader-active");
+    wanted.add(s.fontFamily === "custom" ? "stir-font-custom" : "stir-font-follow");
+    wanted.add(`stir-user-${s.userMode}`);
+    wanted.add(`stir-tools-${s.toolsMode}`);
+    wanted.add(`stir-indent-${s.indentMode}`);
+    wanted.add(`stir-layout-${s.layoutMode}`);
+    if (s.justifyText) wanted.add("stir-justify-text");
 
-    document.body.classList.remove(...remove);
-    document.body.classList.add(s.fontFamily === "custom" ? "stir-font-custom" : "stir-font-follow");
-    document.body.classList.add(`stir-user-${s.userMode || "normal"}`);
-    document.body.classList.add(`stir-tools-${s.toolsMode || "always"}`);
-    document.body.classList.add(`stir-indent-${s.indentMode || "firstline"}`);
-    document.body.classList.add(`stir-layout-${s.layoutMode || "follow"}`);
-
-    if (s.justifyText) document.body.classList.add("stir-justify-text");
-
-    if (s.enabled) {
-        document.body.classList.add("stir-reader-active");
-        startObserver();
-    } else {
-        teardown();
+    for (const cls of READER_CLASSES) {
+        body.classList.toggle(cls, wanted.has(cls));
     }
+
+    if (s.enabled) startObserver();
+    else teardown();
 }
 
-/* -------------------- Observer（精确监听 #chat） -------------------- */
+/* -------------------- Observers -------------------- */
 
 function startObserver() {
     const chat = document.getElementById("chat");
     if (!chat) {
-        scheduleObserverBoot();
+        waitForChatThenStart();
         return;
     }
-    if (observer && observerTarget === chat) return;
 
-    if (observer) {
-        observer.disconnect();
-        observer = null;
+    if (mutationObserver && observerTarget === chat) {
+        observeAllMessages(chat);
+        return;
     }
 
+    teardownObservers();
     observerTarget = chat;
-    observer = new MutationObserver(mutations => {
-        if (isRendering) return;
-        if (!settings().enabled) return;
-        if (mutations.every(isInternalMutation)) return;
-        requestRender("mutation");
-    });
-    observer.observe(chat, { childList: true, subtree: true, characterData: true });
+
+    mutationObserver = new MutationObserver(handleMutations);
+    mutationObserver.observe(chat, { childList: true, subtree: true, characterData: true });
+
+    if (typeof IntersectionObserver !== "undefined") {
+        intersectionObserver = new IntersectionObserver(handleIntersect, {
+            root: null,
+            rootMargin: VIEWPORT_MARGIN,
+            threshold: 0,
+        });
+    }
+
+    observeAllMessages(chat);
+    markAllDirty();
 }
 
-function scheduleObserverBoot() {
-    if (observerBootTimer) return;
+function waitForChatThenStart() {
+    if (chatBootAbortController) return;
 
-    let attempts = 0;
-    observerBootTimer = setInterval(() => {
-        attempts += 1;
+    const controller = new AbortController();
+    chatBootAbortController = controller;
+
+    let timerId = 0;
+    const observer = new MutationObserver(() => {
         if (!settings().enabled) {
-            clearInterval(observerBootTimer);
-            observerBootTimer = null;
+            cleanupChatBoot(controller, observer, timerId);
             return;
         }
-        if (document.getElementById("chat") || attempts >= BOOT_MAX_ATTEMPTS) {
-            clearInterval(observerBootTimer);
-            observerBootTimer = null;
+        if (document.getElementById("chat")) {
+            cleanupChatBoot(controller, observer, timerId);
             startObserver();
         }
-    }, BOOT_INTERVAL_MS);
+    });
+
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    timerId = window.setTimeout(() => cleanupChatBoot(controller, observer, timerId), BOOT_TIMEOUT_MS);
+
+    controller.signal.addEventListener("abort", () => cleanupChatBoot(controller, observer, timerId), { once: true });
+}
+
+function cleanupChatBoot(controller, observer, timerId) {
+    observer.disconnect();
+    if (timerId) window.clearTimeout(timerId);
+    if (chatBootAbortController === controller) chatBootAbortController = null;
+}
+
+function observeAllMessages(chat) {
+    for (const mes of chat.querySelectorAll(":scope > .mes")) {
+        const st = getState(mes);
+        if (intersectionObserver && !st.observed) {
+            intersectionObserver.observe(mes);
+            st.observed = true;
+        }
+    }
+}
+
+function handleMutations(mutations) {
+    if (isRendering || !settings().enabled) return;
+
+    let addedTopLevelMessage = false;
+
+    for (const mutation of mutations) {
+        if (isInternalMutation(mutation)) continue;
+
+        if (mutation.type === "childList" && mutation.target === observerTarget) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains("mes")) {
+                    if (intersectionObserver) {
+                        intersectionObserver.observe(node);
+                        getState(node).observed = true;
+                    }
+                    queueMessage(node);
+                    addedTopLevelMessage = true;
+                }
+            }
+            for (const node of mutation.removedNodes) {
+                if (node.nodeType !== Node.ELEMENT_NODE) continue;
+                intersectionObserver?.unobserve(node);
+                dirtyMessages.delete(node);
+                getState(node).headerAbort?.abort();
+            }
+            continue;
+        }
+
+        const target = mutation.target.nodeType === Node.ELEMENT_NODE
+            ? mutation.target
+            : mutation.target.parentElement;
+        const mes = target?.closest?.(".mes");
+        if (!mes || !observerTarget?.contains(mes)) continue;
+
+            if (target.closest?.(".mes_text")) queueMessage(mes);
+    }
+
+    if (dirtyMessages.size) scheduleRender(addedTopLevelMessage);
+}
+
+function handleIntersect(entries) {
+    let needRender = false;
+    for (const entry of entries) {
+        const mes = entry.target;
+        const st = getState(mes);
+        st.visible = entry.isIntersecting;
+        if (entry.isIntersecting && (st.pendingRender || !st.everRendered)) {
+            dirtyMessages.add(mes);
+            needRender = true;
+        }
+    }
+    if (needRender) scheduleRender(false);
 }
 
 function isInternalMutation(mutation) {
-    const target = mutation.target instanceof Element ? mutation.target : mutation.target?.parentElement;
-    if (!target) return false;
-    return Boolean(target.closest?.(".stir-reader-projection, .stir-message-tools-toggle, .stir-native-content"));
+    const target = mutation.target.nodeType === Node.ELEMENT_NODE
+        ? mutation.target
+        : mutation.target.parentElement;
+    return Boolean(target?.closest?.(".stir-reader-projection"));
 }
 
-/* -------------------- 渲染调度 -------------------- */
-
-function requestRender(reason = "manual") {
-    if (!settings().enabled) return;
-    if (renderQueued) return;
-
-    renderQueued = true;
-    requestAnimationFrame(() => {
-        renderQueued = false;
-        renderAll(reason);
-    });
+function teardownObservers() {
+    mutationObserver?.disconnect();
+    intersectionObserver?.disconnect();
+    chatBootAbortController?.abort();
+    mutationObserver = null;
+    intersectionObserver = null;
+    chatBootAbortController = null;
+    observerTarget = null;
 }
 
-function renderAll(reason = "manual") {
-    const chat = document.querySelector("#chat");
-    if (!chat || !settings().enabled) return;
+/* -------------------- Render scheduler -------------------- */
 
-    const messages = [...chat.querySelectorAll(":scope > .mes")];
-    const s = settings();
-    const renderKey = `${reason}|${messages.length}|${s.userMode}|${s.toolsMode}|${s.splitBrToParagraph}|${s.indentMode}`;
+function queueMessage(mes) {
+    if (!mes?.isConnected) return;
+    const st = getState(mes);
+    st.revision += 1;
+    dirtyMessages.add(mes);
+}
 
-    if (renderKey === lastRenderKey && reason !== "mutation") return;
-    lastRenderKey = renderKey;
+function scheduleRender(forceImmediate = false) {
+    if (renderScheduled) return;
+    renderScheduled = true;
 
-    isRendering = true;
-    try {
-        for (const mes of messages) renderMessage(mes);
-    } finally {
-        isRendering = false;
+    const now = performance.now();
+    const likelyStreaming = !forceImmediate && now < streamingDeadline;
+    streamingDeadline = now + STREAMING_GRACE_MS;
+
+    if (likelyStreaming) {
+        renderTimerId = window.setTimeout(() => {
+            renderTimerId = null;
+            renderScheduled = false;
+            flushDirty();
+        }, STREAMING_THROTTLE_MS);
+    } else {
+        requestAnimationFrame(() => {
+            renderScheduled = false;
+            flushDirty();
+        });
     }
 }
+
+function markAllDirty() {
+    if (!observerTarget) return;
+    for (const mes of observerTarget.querySelectorAll(":scope > .mes")) queueMessage(mes);
+    scheduleRender(true);
+}
+
+function flushDirty() {
+    if (!settings().enabled) {
+        dirtyMessages.clear();
+        return;
+    }
+    if (!dirtyMessages.size) return;
+
+    isRendering = true;
+    hotSettings = settings();
+
+    try {
+        const items = Array.from(dirtyMessages);
+        dirtyMessages.clear();
+
+        if (items.length >= BIG_BATCH_THRESHOLD) {
+            renderBigBatch(items);
+            return;
+        }
+
+        for (const mes of items) {
+            if (!mes.isConnected) continue;
+            const st = getState(mes);
+            if (st.visible === false && st.everRendered) {
+                st.pendingRender = true;
+                continue;
+            }
+            renderMessage(mes);
+        }
+    } finally {
+        isRendering = false;
+        hotSettings = null;
+    }
+}
+
+function renderBigBatch(items) {
+    for (const mes of items) {
+        if (!mes.isConnected) continue;
+        const st = getState(mes);
+        if (st.visible === false && st.everRendered) {
+            st.pendingRender = true;
+            continue;
+        }
+        renderMessage(mes);
+    }
+}
+
+/* -------------------- Message rendering -------------------- */
 
 function renderMessage(mes) {
     const textEl = mes.querySelector(".mes_text");
     if (!textEl) return;
 
-    mes.classList.add("stir-message");
-    mes.classList.toggle("stir-user-message", isUserMessage(mes));
-    mes.classList.toggle("stir-ai-message", !isUserMessage(mes));
-
+    const s = activeSettings();
+    const userMes = isUserMessage(mes);
     const isEditing = Boolean(mes.querySelector("textarea, .edit_textarea, [contenteditable='true']"));
+    const st = getState(mes);
+
+    mes.classList.add("stir-message");
+    mes.classList.toggle("stir-user-message", userMes);
+    mes.classList.toggle("stir-ai-message", !userMes);
     mes.classList.toggle("stir-editing", isEditing);
-    if (isEditing) {
-        mes.classList.add("stir-tools-open");
-        mes.classList.add("stir-native-content-mode");
-    }
+    if (isEditing) mes.classList.add("stir-tools-open");
 
     bindHeaderToggle(mes);
-    ensureNativeWrapper(textEl);
+    const { nativeContent, projection } = ensureProjectionHost(textEl);
+    if (!nativeContent || !projection) return;
 
-    const wrapper = textEl.querySelector(":scope > .stir-native-content");
-    const projection = textEl.querySelector(":scope > .stir-reader-projection");
-    if (!wrapper || !projection) return;
+    const renderKey = `${st.revision}|${projectionSettingsKey(s, userMes, isEditing)}`;
+    if (st.renderKey === renderKey && !isEditing) {
+        st.everRendered = true;
+        st.pendingRender = false;
+        return;
+    }
 
-    const hash = messageHash(wrapper);
-    const s = settings();
-    const renderHash = `${hash}|${s.userMode}|${s.splitBrToParagraph}|${s.indentMode}|${isEditing ? "e" : "v"}`;
-    if (projection.dataset.stirRenderHash === renderHash && !isEditing) return;
+    st.renderKey = renderKey;
+    st.everRendered = true;
+    st.pendingRender = false;
 
-    projection.dataset.stirRenderHash = renderHash;
-    projection.hidden = false;
     projection.replaceChildren();
 
-    if (!mes.classList.contains("stir-editing")) {
-        mes.classList.remove("stir-native-content-mode");
-    }
+    const frontendProtected = !isEditing && isFrontendProtected(nativeContent);
+    const nativeOnly = isEditing || frontendProtected;
+    mes.classList.toggle("stir-frontend-message", frontendProtected);
 
-    if (mes.classList.contains("stir-editing") || isComplexContent(wrapper)) {
-        mes.classList.add("stir-native-content-mode");
+    if (nativeOnly) {
         projection.hidden = true;
+        mes.classList.add("stir-native-content-mode");
         return;
     }
 
-    if (isUserMessage(mes)) {
-        projection.append(buildUserProjection(wrapper));
-        return;
-    }
+    projection.hidden = false;
+    mes.classList.remove("stir-native-content-mode");
 
-    appendReadableBlocks(wrapper, projection);
+    if (userMes) projection.append(buildUserProjection(nativeContent, s));
+    else renderFlow(nativeContent, projection, s);
 }
 
-function ensureNativeWrapper(textEl) {
-    if (textEl.querySelector(":scope > .stir-native-content") && textEl.querySelector(":scope > .stir-reader-projection")) return;
+function ensureProjectionHost(textEl) {
+    let nativeContent = textEl.querySelector(":scope > .stir-native-content");
+    let projection = textEl.querySelector(":scope > .stir-reader-projection");
 
-    const wrapper = document.createElement("div");
-    wrapper.className = "stir-native-content";
+    if (!nativeContent) {
+        nativeContent = document.createElement("div");
+        nativeContent.className = "stir-native-content";
+    }
+    if (!projection) {
+        projection = document.createElement("div");
+        projection.className = "stir-reader-projection";
+    }
 
-    const projection = document.createElement("div");
-    projection.className = "stir-reader-projection";
+    const nodes = Array.from(textEl.childNodes);
+    for (const node of nodes) {
+        if (node === nativeContent || node === projection) continue;
+        if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains("stir-reader-projection")) {
+            node.remove();
+        } else if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains("stir-native-content")) {
+            while (node.firstChild) nativeContent.append(node.firstChild);
+            node.remove();
+        } else {
+            nativeContent.append(node);
+        }
+    }
 
-    const nodes = [...textEl.childNodes].filter(node => !node.classList?.contains?.("stir-reader-projection"));
-    for (const node of nodes) wrapper.append(node);
+    if (nativeContent.parentNode !== textEl) textEl.append(nativeContent);
+    if (projection.parentNode !== textEl) textEl.append(projection);
+    if (projection.previousElementSibling !== nativeContent) textEl.append(projection);
 
-    textEl.append(wrapper, projection);
+    return { nativeContent, projection };
 }
 
 function bindHeaderToggle(mes) {
-    mes.querySelector(":scope > .stir-message-tools-toggle")?.remove();
-    if (mes.dataset.stirHeaderToggleBound === "1") return;
+    const st = getState(mes);
+    if (st.headerAbort) return;
 
-    mes.dataset.stirHeaderToggleBound = "1";
+    const abort = new AbortController();
+    st.headerAbort = abort;
+
     mes.addEventListener("click", event => {
-        if (!settings().enabled || settings().toolsMode !== "folded") return;
+        const s = settings();
+        if (!s.enabled || s.toolsMode !== "folded") return;
+        if (!(event.target instanceof Element)) return;
 
-        const target = event.target;
-        if (!(target instanceof Element)) return;
-
-        const nativeControl = target.closest([
-            "button", "a", "input", "textarea", "select", "option", "summary", "details",
-            "[contenteditable='true']", ".swipe_left", ".swipe_right",
-            ".mes_buttons", ".extraMesButtons", ".extra_mes_buttons", ".mes_edit_buttons",
-            ".mes_button", ".mes_edit", ".mes_delete", ".mes_copy", ".mes_more", ".menu_button",
-            "[class*='mes_edit']", "[class*='mes_button']", "[class*='extraMes']",
-        ].join(","));
-
-        if (nativeControl) {
+        if (event.target.closest(NATIVE_CONTROL_SELECTOR)) {
             mes.classList.add("stir-tools-open");
             return;
         }
+        if (event.target.closest(".stir-reader-projection, .mes_text")) return;
 
-        if (target.closest(".stir-reader-projection, .mes_text")) return;
-
-        const header = target.closest(".mesAvatarWrapper, .ch_name, .name_text, .mes_name, .avatar, .mes_timer, .timestamp, .mesIDDisplay, .tokenCounterDisplay, .mes_model, .mes_meta, .mes_header");
+        const header = event.target.closest(HEADER_SELECTOR);
         if (!header || !mes.contains(header)) return;
-
         mes.classList.toggle("stir-tools-open");
-    }, true);
+    }, { capture: true, signal: abort.signal });
 }
 
-/* -------------------- 投影构建 -------------------- */
+function isFrontendProtected(root) {
+    if (root.querySelector(NATIVE_ONLY_SELECTOR)) return true;
+    return containsFrontendCode(root);
+}
 
-function buildUserProjection(wrapper) {
-    const mode = settings().userMode;
-    if (mode === "hidden") return buildHiddenUserProjection();
-    if (mode === "folded") return buildFoldedUserProjection(wrapper);
+function containsFrontendCode(root) {
+    for (const el of root.querySelectorAll(FRONTEND_CODE_SELECTOR)) {
+        const text = el.textContent || "";
+        if (FRONTEND_CODE_BODY_RE.test(text) || FRONTEND_CODE_RE.test(text)) return true;
+    }
+    return false;
+}
+
+/* -------------------- Projection building -------------------- */
+
+function buildUserProjection(nativeContent, s) {
+    if (s.userMode === "hidden") return buildHiddenUserProjection();
+    if (s.userMode === "folded") return buildFoldedUserProjection(nativeContent, s);
 
     const div = document.createElement("div");
-    appendReadableBlocks(wrapper, div);
+    renderFlow(nativeContent, div, s);
     return div;
 }
 
-function buildFoldedUserProjection(wrapper) {
+function buildFoldedUserProjection(nativeContent, s) {
     const details = document.createElement("details");
     details.className = "stir-user-fold";
 
@@ -552,7 +887,7 @@ function buildFoldedUserProjection(wrapper) {
 
     const body = document.createElement("div");
     body.className = "stir-user-full";
-    appendReadableBlocks(wrapper, body);
+    renderFlow(nativeContent, body, s);
 
     details.append(summary, body);
     return details;
@@ -565,174 +900,348 @@ function buildHiddenUserProjection() {
     return div;
 }
 
-function trimLeadingIndent(p) {
-    if (settings().indentMode === "off") return;
-    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
-    const first = walker.nextNode();
-    if (first) {
-        first.textContent = first.textContent.replace(/^[\u0020\u00A0\u3000\uFEFF\u200B\t]+/, "");
-    }
-}
+function renderFlow(source, target, s) {
+    const inlineRun = [];
 
-function appendReadableBlocks(source, target) {
-    let paragraph = null;
-
-    const ensureParagraph = () => {
-        if (!paragraph) {
-            paragraph = document.createElement("p");
-            paragraph.className = "stir-p";
-        }
-        return paragraph;
+    const flushInlineRun = () => {
+        if (!inlineRun.length) return;
+        const box = document.createElement("div");
+        for (const node of inlineRun) box.append(node.cloneNode(true));
+        inlineRun.length = 0;
+        appendSplitTextBlock(box, target, s);
     };
 
-    const flush = () => {
-        if (!paragraph) return;
-        if (paragraph.textContent.trim() || paragraph.children.length) {
-            trimLeadingIndent(paragraph);
-            target.append(paragraph);
-        }
-        paragraph = null;
-    };
-
-    const splitBr = settings().splitBrToParagraph;
-
-    for (const node of [...source.childNodes]) {
+    for (const node of Array.from(source.childNodes)) {
         if (node.nodeType === Node.TEXT_NODE) {
-            appendTextNode(node, ensureParagraph, flush);
+            if (!node.nodeValue) continue;
+            if (!node.nodeValue.trim()) {
+                if (inlineRun.length && hasInlineFollower(node)) inlineRun.push(document.createTextNode(" "));
+                continue;
+            }
+            inlineRun.push(node);
             continue;
         }
 
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
 
-        const tag = node.tagName.toLowerCase();
-        if (tag === "br") {
-            if (splitBr) flush();
-            else ensureParagraph().append(document.createElement("br"));
-            continue;
+        if (isBlockLike(node)) {
+            flushInlineRun();
+            renderBlock(node, target, s);
+        } else {
+            inlineRun.push(node);
         }
-
-        if (tag === "p") {
-            flush();
-            if (splitBr && containsBr(node)) {
-                appendReadableBlocks(node, target);
-            } else {
-                target.append(cloneAsParagraph(node));
-            }
-            continue;
-        }
-
-        if (isSimpleBlock(node)) {
-            flush();
-            if (splitBr && containsBr(node)) {
-                appendReadableBlocks(node, target);
-            } else {
-                target.append(cloneAsParagraph(node));
-            }
-            continue;
-        }
-
-        ensureParagraph().append(node.cloneNode(true));
     }
 
-    flush();
+    flushInlineRun();
 }
 
-function containsBr(node) {
-    return Boolean(node.querySelector && node.querySelector("br"));
+function renderBlock(el, target, s) {
+    if (shouldPreserveBlock(el)) {
+        target.append(clonePreservedBlock(el));
+        return;
+    }
+
+    if (PARAGRAPH_TAGS.has(el.tagName)) {
+        appendSplitTextBlock(el, target, s);
+        return;
+    }
+
+    if (isPlainFlowContainer(el)) {
+        renderFlow(el, target, s);
+        return;
+    }
+
+    target.append(clonePreservedBlock(el));
 }
 
-function appendTextNode(node, ensureParagraph, flush) {
-    const text = node.textContent.replace(/\r\n/g, "\n");
-    const parts = settings().splitBrToParagraph ? text.split(/\n+/) : [text];
-
-    parts.forEach((part, index) => {
-        const normalized = part.replace(/[\t ]+/g, " ");
-        if (normalized.trim()) ensureParagraph().append(document.createTextNode(normalized));
-        if (settings().splitBrToParagraph && index < parts.length - 1) flush();
-    });
+function isBlockLike(el) {
+    if (PARAGRAPH_TAGS.has(el.tagName)) return true;
+    if (PRESERVE_TAGS.has(el.tagName)) return true;
+    if (FLOW_CONTAINER_TAGS.has(el.tagName)) return true;
+    return false;
 }
 
-function cloneAsParagraph(node) {
+function hasInlineFollower(node) {
+    for (let cur = node.nextSibling; cur; cur = cur.nextSibling) {
+        if (cur.nodeType === Node.TEXT_NODE) {
+            if ((cur.nodeValue || "").trim()) return true;
+            continue;
+        }
+        if (cur.nodeType === Node.ELEMENT_NODE) return !isBlockLike(cur);
+    }
+    return false;
+}
+
+function isPlainFlowContainer(el) {
+    return FLOW_CONTAINER_TAGS.has(el.tagName) && !shouldPreserveBlock(el);
+}
+
+function shouldPreserveBlock(el) {
+    if (PRESERVE_TAGS.has(el.tagName)) return true;
+    if (el.tagName === "BR") return false;
+    if (hasExplicitPreserveMarker(el)) return true;
+    if (isVisualIsland(el)) return true;
+    return false;
+}
+
+function hasExplicitPreserveMarker(el) {
+    return el.hasAttribute("data-stir-preserve") || el.classList.contains("stir-rich-block");
+}
+
+function isVisualIsland(el) {
+    const style = el.getAttribute("style") || "";
+    if (VISUAL_ISLAND_STYLE_RE.test(style)) return true;
+    const cls = el.getAttribute("class") || "";
+    return VISUAL_ISLAND_CLASS_RE.test(cls);
+}
+
+function clonePreservedBlock(el) {
+    const clone = el.cloneNode(true);
+    if (clone.nodeType === Node.ELEMENT_NODE) clone.classList.add("stir-preserve-block");
+    return clone;
+}
+
+/* -------------------- Range-based paragraph segmentation -------------------- */
+
+function appendSplitTextBlock(block, target, s) {
+    if (!s.splitBrToParagraph) {
+        const fragment = cloneWholeContent(block);
+        appendParagraphIfMeaningful(fragment, target, s);
+        return;
+    }
+
+    const breakpoints = collectBreakpoints(block);
+    if (!breakpoints.length) {
+        appendParagraphIfMeaningful(cloneWholeContent(block), target, s);
+        return;
+    }
+
+    let cursor = boundaryAtStart(block);
+    let previousBreakpoint = null;
+
+    for (const breakpoint of breakpoints) {
+        const fragment = cloneBetween(cursor, breakpoint.before);
+        if (fragmentHasMeaningfulContent(fragment)) {
+            appendParagraph(fragment, target, s);
+        } else if (previousBreakpoint) {
+            appendBlankParagraph(target);
+        }
+        cursor = breakpoint.after;
+        previousBreakpoint = breakpoint;
+    }
+
+    const tail = cloneBetween(cursor, boundaryAtEnd(block));
+    if (fragmentHasMeaningfulContent(tail)) appendParagraph(tail, target, s);
+}
+
+function collectBreakpoints(root) {
+    const breakpoints = [];
+    const walker = document.createTreeWalker(
+        root,
+        NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+        {
+            acceptNode(node) {
+                if (node === root) return NodeFilter.FILTER_SKIP;
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    if (node.tagName === "BR") return NodeFilter.FILTER_ACCEPT;
+                    if (shouldPreserveBlock(node)) return NodeFilter.FILTER_REJECT;
+                    return NodeFilter.FILTER_SKIP;
+                }
+                if (node.nodeType === Node.TEXT_NODE && /[\r\n]/.test(node.nodeValue || "")) {
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+                return NodeFilter.FILTER_SKIP;
+            },
+        },
+    );
+
+    let node;
+    while ((node = walker.nextNode())) {
+        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === "BR") {
+            breakpoints.push({
+                kind: "br",
+                before: boundaryBeforeNode(node),
+                after: boundaryAfterNode(node),
+            });
+        } else if (node.nodeType === Node.TEXT_NODE) {
+            for (const item of semanticNewlineOffsets(node.nodeValue || "")) {
+                breakpoints.push({
+                    kind: "text",
+                    before: { container: node, offset: item.start },
+                    after: { container: node, offset: item.end },
+                });
+            }
+        }
+    }
+
+    return breakpoints;
+}
+
+function semanticNewlineOffsets(text) {
+    const result = [];
+    if (!/[\r\n]/.test(text)) return result;
+
+    const firstContent = firstNonWhitespaceIndex(text);
+    if (firstContent < 0) return result;
+
+    const lastContent = lastNonWhitespaceIndex(text);
+    const re = /\r\n|\n|\r/g;
+    let match;
+
+    while ((match = re.exec(text))) {
+        const start = match.index;
+        const end = start + match[0].length;
+        if (firstContent < start && lastContent >= end) result.push({ start, end });
+    }
+    return result;
+}
+
+function firstNonWhitespaceIndex(text) {
+    for (let i = 0; i < text.length; i++) {
+        if (!isWhitespaceChar(text.charCodeAt(i))) return i;
+    }
+    return -1;
+}
+
+function lastNonWhitespaceIndex(text) {
+    for (let i = text.length - 1; i >= 0; i--) {
+        if (!isWhitespaceChar(text.charCodeAt(i))) return i;
+    }
+    return -1;
+}
+
+function isWhitespaceChar(code) {
+    return code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32 || code === 160 || code === 12288 || code === 65279 || code === 8203;
+}
+
+function cloneWholeContent(el) {
+    const fragment = document.createDocumentFragment();
+    for (const child of Array.from(el.childNodes)) fragment.append(child.cloneNode(true));
+    return fragment;
+}
+
+function cloneBetween(start, end) {
+    const range = document.createRange();
+    setRangeBoundary(range, "start", start);
+    setRangeBoundary(range, "end", end);
+    const fragment = range.cloneContents();
+    range.detach?.();
+    return fragment;
+}
+
+function setRangeBoundary(range, side, boundary) {
+    const prefix = side === "start" ? "setStart" : "setEnd";
+    if (boundary.beforeNode) {
+        range[`${prefix}Before`](boundary.beforeNode);
+    } else if (boundary.afterNode) {
+        range[`${prefix}After`](boundary.afterNode);
+    } else {
+        range[prefix](boundary.container, boundary.offset);
+    }
+}
+
+function boundaryAtStart(el) {
+    return { container: el, offset: 0 };
+}
+
+function boundaryAtEnd(el) {
+    return { container: el, offset: el.childNodes.length };
+}
+
+function boundaryBeforeNode(node) {
+    return { beforeNode: node };
+}
+
+function boundaryAfterNode(node) {
+    return { afterNode: node };
+}
+
+function appendParagraphIfMeaningful(fragment, target, s) {
+    if (fragmentHasMeaningfulContent(fragment)) appendParagraph(fragment, target, s);
+}
+
+function appendParagraph(fragment, target, s) {
     const p = document.createElement("p");
     p.className = "stir-p";
-    for (const child of [...node.childNodes]) p.append(child.cloneNode(true));
-    trimLeadingIndent(p);
-    return p;
+    p.append(fragment);
+    trimLeadingIndent(p, s);
+    target.append(p);
 }
 
-function isSimpleBlock(node) {
-    const tag = node.tagName.toLowerCase();
-    if (!["div", "section", "article"].includes(tag)) return false;
-    return !node.querySelector("table, pre, ul, ol, img, video, audio, canvas, svg, iframe, form, input, button, select, textarea, details");
+function appendBlankParagraph(target) {
+    const p = document.createElement("p");
+    p.className = "stir-p stir-blank-line";
+    p.append(document.createElement("br"));
+    target.append(p);
 }
 
-function isComplexContent(wrapper) {
-    // 复杂内容交回酒馆原生渲染，避免破坏表格、代码块和扩展组件。
-    return Boolean(wrapper.querySelector([
-        "table", "pre", "ul", "ol", "img", "video", "audio", "canvas", "svg", "iframe",
-        "form", "input", "button", "select", "textarea", "details", "script", "style",
-        ".mes_reasoning", ".stscript", ".world_entry", ".qr--buttons", ".stir-rich-block",
-    ].join(",")));
+function fragmentHasMeaningfulContent(fragment) {
+    const text = (fragment.textContent || "").replace(/[\u200B\uFEFF]/g, "").trim();
+    if (text) return true;
+    return Boolean(fragment.querySelector?.("img,svg,video,audio,canvas,iframe,table,pre,code,details,hr"));
 }
 
-function messageHash(wrapper) {
-    // 首尾双采样：流式生成时尾部变化剧烈；把采样扩到 128/128 降低碰撞概率。
-    const html = wrapper.innerHTML;
-    const textLen = wrapper.textContent.length;
-    const head = html.length > 128 ? html.slice(0, 128) : html;
-    const tail = html.length > 256 ? html.slice(-128) : "";
-    return `${textLen}:${html.length}:${head}:${tail}`;
+function trimLeadingIndent(p, s) {
+    if (s.indentMode === "off") return;
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    const firstText = walker.nextNode();
+    if (firstText) firstText.textContent = firstText.textContent.replace(LEADING_INDENT_RE, "");
 }
 
 function isUserMessage(mes) {
     return mes.getAttribute("is_user") === "true" || mes.classList.contains("user_mes");
 }
 
-/* -------------------- 关闭清理 -------------------- */
+/* -------------------- Teardown -------------------- */
 
 function teardown() {
-    if (observer) {
-        observer.disconnect();
-        observer = null;
-        observerTarget = null;
+    teardownObservers();
+
+    dirtyMessages.clear();
+    if (renderTimerId) {
+        clearTimeout(renderTimerId);
+        renderTimerId = null;
     }
-    if (observerBootTimer) {
-        clearInterval(observerBootTimer);
-        observerBootTimer = null;
-    }
+    renderScheduled = false;
+    streamingDeadline = 0;
 
-    lastRenderKey = "";
+    document.body.classList.remove(...READER_CLASSES);
 
-    document.body.classList.remove(
-        "stir-reader-active", "stir-justify-text",
-        "stir-font-follow", "stir-font-custom",
-        "stir-user-folded", "stir-user-normal", "stir-user-hidden",
-        "stir-tools-folded", "stir-tools-always",
-        "stir-indent-firstline", "stir-indent-block", "stir-indent-off",
-        "stir-layout-follow", "stir-layout-clean",
-    );
+    const chat = document.getElementById("chat");
+    if (!chat) return;
 
-    for (const mes of document.querySelectorAll("#chat > .mes.stir-message")) {
-        mes.classList.remove("stir-message", "stir-user-message", "stir-ai-message", "stir-native-content-mode", "stir-tools-open", "stir-editing");
-        mes.querySelector(":scope > .stir-message-tools-toggle")?.remove();
+    for (const mes of chat.querySelectorAll(":scope > .mes.stir-message")) {
+        const st = getState(mes);
+        st.headerAbort?.abort();
+
+        mes.classList.remove(
+            "stir-message", "stir-user-message", "stir-ai-message",
+            "stir-native-content-mode", "stir-frontend-message", "stir-tools-open", "stir-editing",
+        );
 
         const textEl = mes.querySelector(".mes_text");
-        const wrapper = textEl?.querySelector(":scope > .stir-native-content");
-        const projection = textEl?.querySelector(":scope > .stir-reader-projection");
-        if (!textEl || !wrapper) continue;
+        if (!textEl) continue;
 
+        const nativeContent = textEl.querySelector(":scope > .stir-native-content");
+        const projection = textEl.querySelector(":scope > .stir-reader-projection");
         projection?.remove();
-        while (wrapper.firstChild) textEl.append(wrapper.firstChild);
-        wrapper.remove();
+
+        if (nativeContent) {
+            const fragment = document.createDocumentFragment();
+            while (nativeContent.firstChild) fragment.append(nativeContent.firstChild);
+            textEl.append(fragment);
+            nativeContent.remove();
+        }
+
+        messageState.delete(mes);
     }
 }
 
-/* -------------------- 入口 -------------------- */
+/* -------------------- Entry -------------------- */
 
 jQuery(async () => {
     settings();
-    schedulePanelBoot();
+    bootPanelWhenReady();
     applyReaderState();
-    requestRender("boot");
-    console.info(`[${MODULE_NAME}] loaded v${VERSION}`);
+    console.info(`[${MODULE_NAME}] ${VERSION} · by ${AUTHOR}`);
 });
