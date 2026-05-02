@@ -4,7 +4,7 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const MODULE_NAME = "st-immersive-reading";
 const MODULE_DISPLAY_NAME = "沉浸式阅读";
 const AUTHOR = "vexory";
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
@@ -88,6 +88,10 @@ const VISUAL_ISLAND_STYLE_RE = /(?:^|;)\s*(?:display\s*:\s*(?:flex|grid|inline-f
 const VISUAL_ISLAND_CLASS_RE = /(?:^|[-_\s])(?:card|panel|frontend|status|stats?|mvu|dashboard|inventory|profile|meter|bar|widget|ui)(?:$|[-_\s])/i;
 
 const FLOW_CONTAINER_TAGS = new Set(["DIV", "SECTION", "ARTICLE", "MAIN", "ASIDE", "HEADER", "FOOTER"]);
+
+const MIXED_PROJECTION_CLASS = "stir-mixed-reader-projection";
+const MIXED_SOURCE_CLASS = "stir-mixed-source-hidden";
+const MIXED_SOURCE_RUN_ATTR = "data-stir-mixed-source-run";
 const PARAGRAPH_TAGS = new Set(["P"]);
 
 const LEADING_INDENT_RE = /^[\u0020\u00A0\u3000\uFEFF\u200B\t]+/;
@@ -190,7 +194,7 @@ function initPanel() {
     target.insertAdjacentHTML("beforeend", `
         <div id="stir_settings_panel" class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>ST Immersive Reading / ${MODULE_DISPLAY_NAME}</b>
+                <b>${MODULE_DISPLAY_NAME}</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
@@ -270,7 +274,7 @@ function initPanel() {
                         <span class="stir-footer-version">v${VERSION}</span>
                     </button>
                     <div class="stir-about-popover" hidden role="dialog" aria-label="关于">
-                        <div class="stir-about-title">ST Immersive Reading</div>
+                        <div class="stir-about-title">${MODULE_DISPLAY_NAME}</div>
                         <div class="stir-about-row"><span>Version</span><b>${VERSION}</b></div>
                         <div class="stir-about-row"><span>Author</span><b>${AUTHOR}</b></div>
                     </div>
@@ -610,7 +614,7 @@ function handleMutations(mutations) {
                 if (node.nodeType !== Node.ELEMENT_NODE) continue;
                 intersectionObserver?.unobserve(node);
                 dirtyMessages.delete(node);
-                getState(node).headerAbort?.abort();
+                messageState.get(node)?.headerAbort?.abort();
             }
             continue;
         }
@@ -645,7 +649,7 @@ function isInternalMutation(mutation) {
     const target = mutation.target.nodeType === Node.ELEMENT_NODE
         ? mutation.target
         : mutation.target.parentElement;
-    return Boolean(target?.closest?.(".stir-reader-projection"));
+    return Boolean(target?.closest?.(".stir-reader-projection, .stir-mixed-reader-projection"));
 }
 
 function teardownObservers() {
@@ -759,6 +763,29 @@ function renderMessage(mes) {
     if (isEditing) mes.classList.add("stir-tools-open");
 
     bindHeaderToggle(mes);
+
+    const sourceRoot = textEl.querySelector(":scope > .stir-native-content") || textEl;
+    const frontendProtected = !isEditing && isFrontendProtected(sourceRoot);
+    mes.classList.toggle("stir-frontend-message", frontendProtected);
+
+    if (frontendProtected) {
+        const renderKey = `${st.revision}|mixed-segments|${projectionSettingsKey(s, userMes, isEditing)}`;
+        if (st.renderKey !== renderKey) {
+            restoreNativeHost(textEl);
+            cleanupMixedSegments(textEl);
+            if (!isEditing) renderMixedSegments(textEl, s);
+            st.renderKey = renderKey;
+        }
+        st.everRendered = true;
+        st.pendingRender = false;
+        mes.classList.remove("stir-native-content-mode");
+        mes.classList.add("stir-mixed-segments-mode");
+        return;
+    }
+
+    cleanupMixedSegments(textEl);
+    mes.classList.remove("stir-mixed-segments-mode");
+
     const { nativeContent, projection } = ensureProjectionHost(textEl);
     if (!nativeContent || !projection) return;
 
@@ -775,11 +802,7 @@ function renderMessage(mes) {
 
     projection.replaceChildren();
 
-    const frontendProtected = !isEditing && isFrontendProtected(nativeContent);
-    const nativeOnly = isEditing || frontendProtected;
-    mes.classList.toggle("stir-frontend-message", frontendProtected);
-
-    if (nativeOnly) {
+    if (isEditing) {
         projection.hidden = true;
         mes.classList.add("stir-native-content-mode");
         return;
@@ -790,6 +813,18 @@ function renderMessage(mes) {
 
     if (userMes) projection.append(buildUserProjection(nativeContent, s));
     else renderFlow(nativeContent, projection, s);
+}
+
+function restoreNativeHost(textEl) {
+    textEl.querySelector(":scope > .stir-reader-projection")?.remove();
+
+    const nativeContent = textEl.querySelector(":scope > .stir-native-content");
+    if (!nativeContent) return;
+
+    const fragment = document.createDocumentFragment();
+    while (nativeContent.firstChild) fragment.append(nativeContent.firstChild);
+    textEl.insertBefore(fragment, nativeContent);
+    nativeContent.remove();
 }
 
 function ensureProjectionHost(textEl) {
@@ -850,16 +885,158 @@ function bindHeaderToggle(mes) {
 }
 
 function isFrontendProtected(root) {
-    if (root.querySelector(NATIVE_ONLY_SELECTOR)) return true;
+    if (root.matches?.(NATIVE_ONLY_SELECTOR) || root.querySelector(NATIVE_ONLY_SELECTOR)) return true;
     return containsFrontendCode(root);
 }
 
 function containsFrontendCode(root) {
-    for (const el of root.querySelectorAll(FRONTEND_CODE_SELECTOR)) {
+    const nodes = root.matches?.(FRONTEND_CODE_SELECTOR)
+        ? [root, ...root.querySelectorAll(FRONTEND_CODE_SELECTOR)]
+        : root.querySelectorAll(FRONTEND_CODE_SELECTOR);
+
+    for (const el of nodes) {
         const text = el.textContent || "";
         if (FRONTEND_CODE_BODY_RE.test(text) || FRONTEND_CODE_RE.test(text)) return true;
     }
     return false;
+}
+
+
+function renderMixedSegments(root, s) {
+    const nodes = Array.from(root.childNodes);
+    let inlineRun = [];
+
+    const flushInlineRun = () => {
+        if (!inlineRun.length) return;
+        const run = inlineRun;
+        inlineRun = [];
+        appendMixedInlineRun(root, run, s);
+    };
+
+    for (const node of nodes) {
+        if (!node.isConnected || isMixedProjection(node) || isMixedSourceRun(node)) continue;
+
+        if (node.nodeType === Node.TEXT_NODE) {
+            if (node.nodeValue && node.nodeValue.trim()) inlineRun.push(node);
+            continue;
+        }
+
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+        if (isMixedUnsafeRoot(node)) {
+            flushInlineRun();
+            continue;
+        }
+
+        if (hasMixedUnsafeDescendant(node)) {
+            flushInlineRun();
+            continue;
+        }
+
+        if (isBlockLike(node) || shouldPreserveBlock(node)) {
+            flushInlineRun();
+            appendMixedElementProjection(node, s);
+            continue;
+        }
+
+        inlineRun.push(node);
+    }
+
+    flushInlineRun();
+}
+
+function appendMixedElementProjection(source, s) {
+    if (!source.parentNode || source.classList.contains(MIXED_SOURCE_CLASS)) return;
+
+    const projection = document.createElement("div");
+    projection.className = MIXED_PROJECTION_CLASS;
+
+    if (PARAGRAPH_TAGS.has(source.tagName)) appendSplitTextBlock(source, projection, s);
+    else renderFlow(source, projection, s);
+
+    if (!projection.childNodes.length) return;
+    source.classList.add(MIXED_SOURCE_CLASS);
+    source.after(projection);
+}
+
+function appendMixedInlineRun(container, nodes, s) {
+    const liveNodes = nodes.filter(node => node.parentNode === container);
+    if (!liveNodes.length) return;
+
+    const source = document.createElement("span");
+    source.className = MIXED_SOURCE_CLASS;
+    source.setAttribute(MIXED_SOURCE_RUN_ATTR, "1");
+    source.setAttribute("aria-hidden", "true");
+
+    container.insertBefore(source, liveNodes[0]);
+    for (const node of liveNodes) {
+        if (node.parentNode === container) source.append(node);
+    }
+
+    const box = document.createElement("div");
+    for (const child of source.childNodes) box.append(child.cloneNode(true));
+
+    const projection = document.createElement("div");
+    projection.className = MIXED_PROJECTION_CLASS;
+    appendSplitTextBlock(box, projection, s);
+
+    if (projection.childNodes.length) source.after(projection);
+    else unwrapMixedSourceRun(source);
+}
+
+function cleanupMixedSegments(root) {
+    for (const projection of Array.from(root.querySelectorAll?.(`.${MIXED_PROJECTION_CLASS}`) || [])) {
+        projection.remove();
+    }
+
+    for (const source of Array.from(root.querySelectorAll?.(`[${MIXED_SOURCE_RUN_ATTR}]`) || [])) {
+        unwrapMixedSourceRun(source);
+    }
+
+    for (const source of Array.from(root.querySelectorAll?.(`.${MIXED_SOURCE_CLASS}`) || [])) {
+        source.classList.remove(MIXED_SOURCE_CLASS);
+        source.removeAttribute("aria-hidden");
+    }
+}
+
+function unwrapMixedSourceRun(source) {
+    const parent = source.parentNode;
+    if (!parent) return;
+    while (source.firstChild) parent.insertBefore(source.firstChild, source);
+    source.remove();
+}
+
+function isMixedProjection(node) {
+    return node.nodeType === Node.ELEMENT_NODE && node.classList.contains(MIXED_PROJECTION_CLASS);
+}
+
+function isMixedSourceRun(node) {
+    return node.nodeType === Node.ELEMENT_NODE && node.hasAttribute(MIXED_SOURCE_RUN_ATTR);
+}
+
+function isMixedUnsafeRoot(el) {
+    if (!(el instanceof Element)) return false;
+    if (el.matches?.(NATIVE_ONLY_SELECTOR)) return true;
+    if (isFrontendCodeElement(el)) return true;
+    return false;
+}
+
+function hasMixedUnsafeDescendant(el) {
+    if (!(el instanceof Element)) return false;
+    if (el.querySelector?.(NATIVE_ONLY_SELECTOR)) return true;
+    return containsFrontendCode(el);
+}
+
+function isFrontendCodeElement(el) {
+    if (!(el instanceof Element)) return false;
+    const block = el.tagName === "PRE"
+        ? el
+        : el.tagName === "CODE"
+            ? (el.closest("pre") || el)
+            : null;
+    if (!block || block !== el) return false;
+    const text = block.textContent || "";
+    return FRONTEND_CODE_BODY_RE.test(text) || FRONTEND_CODE_RE.test(text);
 }
 
 /* -------------------- Projection building -------------------- */
@@ -1216,11 +1393,13 @@ function teardown() {
 
         mes.classList.remove(
             "stir-message", "stir-user-message", "stir-ai-message",
-            "stir-native-content-mode", "stir-frontend-message", "stir-tools-open", "stir-editing",
+            "stir-native-content-mode", "stir-frontend-message", "stir-mixed-segments-mode", "stir-tools-open", "stir-editing",
         );
 
         const textEl = mes.querySelector(".mes_text");
         if (!textEl) continue;
+
+        cleanupMixedSegments(textEl);
 
         const nativeContent = textEl.querySelector(":scope > .stir-native-content");
         const projection = textEl.querySelector(":scope > .stir-reader-projection");
