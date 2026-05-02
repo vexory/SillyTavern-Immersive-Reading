@@ -110,19 +110,19 @@ body.stir-reader-active #chat {
     margin-right: auto !important;
 }
 
-body.stir-reader-active #chat,
-body.stir-reader-active #chat *:not(button):not(input):not(select):not(textarea):not(summary):not([contenteditable="true"]) {
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message),
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message) *:not(button):not(input):not(select):not(textarea):not(summary):not([contenteditable="true"]) {
     -webkit-user-select: text;
     user-select: text;
     -webkit-touch-callout: default;
 }
 
-body.stir-reader-active #chat button,
-body.stir-reader-active #chat input,
-body.stir-reader-active #chat select,
-body.stir-reader-active #chat textarea,
-body.stir-reader-active #chat summary,
-body.stir-reader-active #chat [contenteditable="true"] {
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message) button,
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message) input,
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message) select,
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message) textarea,
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message) summary,
+body.stir-reader-active #chat > .mes:not(.stir-frontend-message) [contenteditable="true"] {
     -webkit-user-select: auto;
     user-select: auto;
 }
@@ -196,14 +196,14 @@ body.stir-reader-active.stir-indent-off #chat .stir-reader-projection p {
     padding-left: 0 !important;
 }
 
-body.stir-reader-active #chat :is(table, pre, code, ul, ol, li, blockquote, details, img, video, audio, canvas, svg, iframe, form, input, button, select, textarea, .stir-rich-block) {
+body.stir-reader-active #chat .stir-reader-projection :is(table, pre, code, ul, ol, li, blockquote, details, img, video, audio, canvas, svg, iframe, form, input, button, select, textarea, .stir-rich-block) {
     text-indent: 0 !important;
     padding-left: 0 !important;
 }
 
-body.stir-reader-active #chat pre,
-body.stir-reader-active #chat code,
-body.stir-reader-active #chat table {
+body.stir-reader-active #chat .stir-reader-projection pre,
+body.stir-reader-active #chat .stir-reader-projection code,
+body.stir-reader-active #chat .stir-reader-projection table {
     font-size: 0.92em;
 }
 
@@ -309,11 +309,11 @@ body.stir-reader-active .stir-user-hidden-marker {
     display: none !important;
 }
 
-body.stir-reader-active #chat q {
+body.stir-reader-active #chat .stir-reader-projection q {
     quotes: none !important;
 }
-body.stir-reader-active #chat q::before,
-body.stir-reader-active #chat q::after {
+body.stir-reader-active #chat .stir-reader-projection q::before,
+body.stir-reader-active #chat .stir-reader-projection q::after {
     content: "" !important;
 }
 
@@ -543,4 +543,54 @@ body.stir-reader-active #chat .stir-reader-projection details.stir-preserve-bloc
 
 body.stir-reader-active #chat .stir-reader-projection .stir-blank-line {
     min-height: calc(var(--stir-line-height) * 0.5em) !important;
+}
+
+body.stir-reader-active #chat .stir-mixed-source-hidden {
+    display: none !important;
+}
+
+body.stir-reader-active #chat .stir-mixed-reader-projection {
+    display: block !important;
+    font-size: var(--stir-font-size) !important;
+    line-height: var(--stir-line-height) !important;
+    letter-spacing: normal !important;
+    word-spacing: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    -webkit-font-smoothing: antialiased !important;
+}
+
+body.stir-reader-active.stir-font-custom #chat .stir-mixed-reader-projection {
+    font-family: var(--stir-custom-font-family) !important;
+}
+
+body.stir-reader-active.stir-justify-text #chat .stir-mixed-reader-projection {
+    text-align: justify !important;
+    text-align-last: left !important;
+}
+
+body.stir-reader-active #chat .stir-mixed-reader-projection p {
+    margin-top: var(--stir-paragraph-gap) !important;
+    margin-bottom: var(--stir-paragraph-gap) !important;
+    line-height: inherit !important;
+}
+
+body.stir-reader-active.stir-indent-firstline #chat .stir-mixed-reader-projection p {
+    text-indent: var(--stir-indent) !important;
+    padding-left: 0 !important;
+}
+
+body.stir-reader-active.stir-indent-block #chat .stir-mixed-reader-projection p {
+    text-indent: 0 !important;
+    padding-left: var(--stir-indent) !important;
+}
+
+body.stir-reader-active.stir-indent-off #chat .stir-mixed-reader-projection p {
+    text-indent: 0 !important;
+    padding-left: 0 !important;
+}
+
+body.stir-reader-active #chat .stir-mixed-reader-projection :is(table, pre, code, ul, ol, li, blockquote, details, img, video, audio, canvas, svg, iframe, form, input, button, select, textarea, .stir-rich-block) {
+    text-indent: 0 !important;
+    padding-left: 0 !important;
 }
