@@ -8,7 +8,6 @@
     --stir-custom-font-family: inherit;
 }
 
-/* === Extension settings panel === */
 #stir_settings_panel .inline-drawer-content {
     padding: 0.6rem 0.7rem 0.8rem !important;
 }
@@ -76,10 +75,6 @@
     display: flex;
 }
 
-#stir_custom_font {
-    flex: 1 1 14rem;
-}
-
 #stir_settings_panel .stir-inline-help {
     flex: 1 1 100%;
     opacity: 0.68;
@@ -95,12 +90,6 @@
     margin-top: 0.5rem;
 }
 
-#stir_settings_panel .stir-important-note {
-    padding: 0.5rem 0.6rem;
-    border-radius: 0.55rem;
-    background: color-mix(in srgb, currentColor 7%, transparent);
-}
-
 #stir_settings_panel .stir-section-title {
     margin: 0.85rem 0 0.35rem;
     opacity: 0.72;
@@ -108,10 +97,6 @@
     letter-spacing: 0.08em;
 }
 
-/* === Immersive reading architecture ===
-   v1.0.0 keeps native .mes nodes and native controls.
-   Only .mes_text receives a readable projection; complex HTML remains native.
-*/
 body.stir-reader-active #chat {
     padding-left: var(--stir-side-padding) !important;
     padding-right: var(--stir-side-padding) !important;
@@ -124,29 +109,6 @@ body.stir-reader-active #chat {
     margin-left: auto !important;
     margin-right: auto !important;
 }
-
-/* Compatibility mode: only clean the message shell when a third-party theme
-   pushes the native message body out of the readable column. It does not
-   replace colors, backgrounds, or the user's global Tavern theme. */
-body.stir-reader-active.stir-layout-clean #chat > .mes.stir-message {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-    box-sizing: border-box !important;
-}
-
-body.stir-reader-active.stir-layout-clean #chat > .mes.stir-message .mes_block,
-body.stir-reader-active.stir-layout-clean #chat > .mes.stir-message .mes_text {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    box-sizing: border-box !important;
-}
-
 
 body.stir-reader-active #chat,
 body.stir-reader-active #chat *:not(button):not(input):not(select):not(textarea):not(summary):not([contenteditable="true"]) {
@@ -183,6 +145,15 @@ body.stir-reader-active.stir-font-custom #chat .mes_text {
     font-family: var(--stir-custom-font-family) !important;
 }
 
+body.stir-reader-active #chat > .mes.stir-frontend-message .mes_text {
+    font-size: inherit !important;
+    line-height: inherit !important;
+    letter-spacing: inherit !important;
+    word-spacing: inherit !important;
+    word-break: inherit !important;
+    overflow-wrap: inherit !important;
+}
+
 body.stir-reader-active .stir-reader-projection {
     display: block !important;
 }
@@ -199,33 +170,28 @@ body.stir-reader-active .stir-message.stir-native-content-mode .stir-native-cont
     display: block !important;
 }
 
-body.stir-reader-active.stir-justify-text #chat .stir-reader-projection,
-body.stir-reader-active.stir-justify-text #chat .stir-native-content {
+body.stir-reader-active.stir-justify-text #chat .stir-reader-projection {
     text-align: justify !important;
     text-align-last: left !important;
 }
 
-body.stir-reader-active #chat .stir-reader-projection p,
-body.stir-reader-active #chat .stir-native-content p {
+body.stir-reader-active #chat .stir-reader-projection p {
     margin-top: var(--stir-paragraph-gap) !important;
     margin-bottom: var(--stir-paragraph-gap) !important;
     line-height: inherit !important;
 }
 
-body.stir-reader-active.stir-indent-firstline #chat .stir-reader-projection p,
-body.stir-reader-active.stir-indent-firstline #chat .stir-native-content p {
+body.stir-reader-active.stir-indent-firstline #chat .stir-reader-projection p {
     text-indent: var(--stir-indent) !important;
     padding-left: 0 !important;
 }
 
-body.stir-reader-active.stir-indent-block #chat .stir-reader-projection p,
-body.stir-reader-active.stir-indent-block #chat .stir-native-content p {
+body.stir-reader-active.stir-indent-block #chat .stir-reader-projection p {
     text-indent: 0 !important;
     padding-left: var(--stir-indent) !important;
 }
 
-body.stir-reader-active.stir-indent-off #chat .stir-reader-projection p,
-body.stir-reader-active.stir-indent-off #chat .stir-native-content p {
+body.stir-reader-active.stir-indent-off #chat .stir-reader-projection p {
     text-indent: 0 !important;
     padding-left: 0 !important;
 }
@@ -241,7 +207,6 @@ body.stir-reader-active #chat table {
     font-size: 0.92em;
 }
 
-/* Native tool drawer: no fake buttons. Folded mode uses the native name/header row as the handle. */
 body.stir-reader-active .stir-message-tools-toggle {
     display: none !important;
 }
@@ -250,8 +215,6 @@ body.stir-reader-active.stir-tools-folded #chat > .mes :is(.mesAvatarWrapper, .c
     cursor: pointer !important;
 }
 
-/* Folded tools must be truly folded, not merely dimmed. Keep the native DOM alive,
-   but remove its hitbox/visual noise until the message is opened. */
 body.stir-reader-active.stir-tools-folded #chat > .mes:not(.stir-tools-open) :is(.mesIDDisplay, .timestamp, .tokenCounterDisplay, .mes_timer, .mes_model, .mes_token_count, .mes_extra, .mes_meta) {
     opacity: 0.18 !important;
 }
@@ -271,8 +234,6 @@ body.stir-reader-active.stir-tools-folded #chat > .mes:not(.stir-tools-open) .me
     padding-bottom: 0 !important;
 }
 
-/* Native swipe arrows are intentionally left untouched. SillyTavern decides when the real continuation arrow exists. */
-
 body.stir-reader-active.stir-tools-folded #chat > .mes.stir-tools-open :is(.mes_buttons, .extraMesButtons, .extra_mes_buttons, .mes_edit_buttons, .mes_button, .mes_controls, .mesIDDisplay, .timestamp, .tokenCounterDisplay, .mes_timer, .mes_model, .mes_token_count, .mes_extra, .mes_meta, [class*="extraMes"], [class*="mes_button"]),
 body.stir-reader-active.stir-tools-folded #chat > .mes.stir-tools-open .mesAvatarWrapper :is(button, .menu_button, .drawer-opener, .mes_edit, .mes_delete, .mes_copy, .mes_more, .fa-pencil, .fa-pen, .fa-ellipsis, .fa-ellipsis-h, .fa-ellipsis-vertical, [class*="mes_edit"], [class*="mes_button"]),
 body.stir-reader-active.stir-tools-always #chat :is(.mes_buttons, .extraMesButtons, .extra_mes_buttons, .mes_edit_buttons, .mes_button, .mes_controls, .mesIDDisplay, .timestamp, .tokenCounterDisplay, .mes_timer, .mes_model, .mes_token_count, .mes_extra, .mes_meta, [class*="extraMes"], [class*="mes_button"]) {
@@ -283,10 +244,6 @@ body.stir-reader-active.stir-tools-always #chat :is(.mes_buttons, .extraMesButto
     height: auto !important;
     overflow: visible !important;
 }
-
-/* Do not force-show .swipe_left/.swipe_right; forcing them creates fake arrows on every floor. */
-
-/* User message modes. Folded mode is intentionally almost invisible; the native name/header row remains the handle. */
 
 body.stir-reader-active.stir-user-folded #chat > .mes.stir-user-message :is(.mesAvatarWrapper, .ch_name, .mes_header) {
     border-top: 0 !important;
@@ -352,7 +309,6 @@ body.stir-reader-active .stir-user-hidden-marker {
     display: none !important;
 }
 
-/* Avoid duplicated pseudo quotes from q tags or user themes. */
 body.stir-reader-active #chat q {
     quotes: none !important;
 }
@@ -372,7 +328,6 @@ body.stir-reader-active #chat q::after {
     }
 }
 
-/* === Settings text input follows SillyTavern theme === */
 #stir_settings_panel #stir_custom_font {
     flex: 1 1 14rem;
     box-sizing: border-box !important;
@@ -395,11 +350,6 @@ body.stir-reader-active #chat q::after {
     outline-offset: 1px !important;
 }
 
-/* === Layout compatibility mode ===
-   Some themes keep avatar/metadata as a fixed left or right column. That leaves
-   the message body visually squeezed even when #chat width is correct. Clean mode
-   converts the native message shell into a vertical reader layout: header/meta on
-   top, body below. Native buttons and metadata are still the original DOM. */
 body.stir-reader-active.stir-layout-clean #chat {
     gap: 0 !important;
 }
@@ -482,8 +432,115 @@ body.stir-reader-active.stir-layout-clean #chat > .mes.stir-message .name_text {
     white-space: nowrap !important;
 }
 
-/* Keep native metadata usable, but prevent side-column themes from reserving huge width. */
 body.stir-reader-active.stir-layout-clean #chat > .mes.stir-message :is(.mesIDDisplay, .timestamp, .tokenCounterDisplay, .mes_timer, .mes_model, .mes_token_count, .mes_extra, .mes_meta) {
     max-width: 100% !important;
     min-width: 0 !important;
+}
+
+#stir_settings_panel .stir-footer-wrap {
+    position: relative;
+    margin-top: 14px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+#stir_settings_panel .stir-footer-trigger {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    padding: 4px 6px;
+    margin: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    opacity: 0.38;
+    border-radius: 4px;
+    transition: opacity 180ms ease, background-color 180ms ease;
+    user-select: none;
+}
+#stir_settings_panel .stir-footer-trigger:hover,
+#stir_settings_panel .stir-footer-trigger[aria-expanded="true"] {
+    opacity: 0.9;
+    background: rgba(128, 128, 128, 0.08);
+}
+#stir_settings_panel .stir-footer-trigger:focus { outline: none; }
+#stir_settings_panel .stir-footer-trigger:focus-visible {
+    outline: 1px dotted currentColor;
+    outline-offset: 2px;
+}
+
+#stir_settings_panel .stir-footer-icon {
+    font-size: 13px;
+    line-height: 1;
+    font-style: normal;
+}
+#stir_settings_panel .stir-footer-version {
+    font-variant-numeric: tabular-nums;
+}
+
+#stir_settings_panel .stir-about-popover {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    min-width: 200px;
+    padding: 10px 14px;
+    background: var(--SmartThemeBlurTintColor, var(--black70a, rgba(20, 20, 24, 0.96)));
+    color: var(--SmartThemeBodyColor, inherit);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.3));
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.55;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+    -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+    z-index: 20;
+}
+#stir_settings_panel .stir-about-popover[hidden] { display: none; }
+
+#stir_settings_panel .stir-about-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.2));
+    letter-spacing: 0.02em;
+}
+#stir_settings_panel .stir-about-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 2px 0;
+    opacity: 0.9;
+}
+#stir_settings_panel .stir-about-row b { font-weight: 600; }
+
+body.stir-reader-active #chat .stir-reader-projection > .stir-preserve-block,
+body.stir-reader-active #chat .stir-reader-projection .stir-preserve-block {
+    text-indent: 0 !important;
+    padding-left: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+body.stir-reader-active #chat .stir-reader-projection > .stir-preserve-block {
+    margin-top: var(--stir-paragraph-gap) !important;
+    margin-bottom: var(--stir-paragraph-gap) !important;
+}
+
+body.stir-reader-active #chat .stir-reader-projection details.stir-preserve-block {
+    white-space: pre-wrap !important;
+}
+
+body.stir-reader-active #chat .stir-reader-projection details.stir-preserve-block > summary {
+    white-space: normal !important;
+}
+
+body.stir-reader-active #chat .stir-reader-projection .stir-blank-line {
+    min-height: calc(var(--stir-line-height) * 0.5em) !important;
 }
