@@ -4,7 +4,7 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const MODULE_NAME = "st-immersive-reading";
 const MODULE_DISPLAY_NAME = "沉浸式阅读";
 const AUTHOR = "vexory";
-const VERSION = "3.0.0";
+const VERSION = "3.0.1";
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
@@ -202,7 +202,7 @@ function initPanel() {
                 <div class="stir-setting-row stir-setting-row-main">
                     <label class="checkbox_label" for="stir_enabled">
                         <input id="stir_enabled" type="checkbox" />
-                        <span>阅读排版</span>
+                        <span>启用扩展</span>
                     </label>
                 </div>
 
